@@ -23,7 +23,7 @@ const Auth = () => {
     const password = (document.getElementById("signin-password") as HTMLInputElement).value;
 
     try {
-      const res = await fetch("http://localhost:5000/auth/login", {
+      const res = await fetch("https://d3hsynlhookvwj.cloudfront.net/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -60,7 +60,7 @@ const Auth = () => {
     const password = (document.getElementById("signup-password") as HTMLInputElement).value;
 
     try {
-      const res = await fetch("http://localhost:5000/auth/signup", {
+      const res = await fetch("https://d3hsynlhookvwj.cloudfront.net/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, password }),

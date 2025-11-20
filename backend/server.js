@@ -17,12 +17,14 @@ import User from "./models/Users.js";
 import FileModel from "./models/File1.js";
 import FolderModel from "./models/Folder.js";
 
-// ----------------- MONGODB CONNECTION -----------------
-mongoose
-  .connect(process.env.MONGO_URI, { dbName: "cloudbox" })
+
+
+// Connect to MongoDB Atlas
+mongoose.connect(process.env.MONGO_URI, { dbName: "cloudbox" })
   .then(() => console.log("🍃 MongoDB Atlas Connected"))
   .catch((err) => console.error("MongoDB Error:", err));
 
+// Fix __dirname for ES module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -47,6 +49,7 @@ const s3 = new AWS.S3({
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
 });
 
+
 // ----------------- ROUTES -----------------
 
 /* =================================================================
@@ -60,37 +63,104 @@ app.get("/ping", (req, res) => {
   });
 });
 
-/* =================================================================
-   GET FILES (per user)
-================================================================= */
-app.get("/files", auth, async (req, res) => {
-  const userId = req.user.userId;
-  const folder = req.query.folder || null;
 
-  const found = await FileModel.find({ userId, folder });
-  res.json(found);
+/* -------------------------
+        GET FILES  (per user)
+------------------------- */
+app.get("/files", auth, async (req, res) => {
+  const folder = req.query.folder || null;
+  const userId = req.user.userId;
+
+  const query = { userId };
+  if (folder) query.folder = folder;
+  else query.folder = null;
+
+  const found = await FileModel.find(query);
+
+  res.json(
+    found.map((f) => ({
+      id: f._id.toString(),
+      name: f.name,
+      size: f.size,
+      uploadedAt: f.uploadedAt,
+      url: f.url,
+      folder: f.folder || null,
+    }))
+  );
 });
 
-/* =================================================================
-   GET FOLDERS (per user)
-================================================================= */
+/* -------------------------
+        GET FOLDERS (per user)
+------------------------- */
 app.get("/folders", auth, async (req, res) => {
   const userId = req.user.userId;
+
   const found = await FolderModel.find({ userId });
-  res.json(found);
+
+  res.json(
+    found.map((f) => ({
+      id: f._id.toString(),
+      name: f.name,
+      parent: f.parent || null,
+    }))
+  );
 });
 
-/* =================================================================
-   CREATE FOLDER
-================================================================= */
+
++
+/* -------------------------
+        CREATE FOLDER (per user)
+------------------------- */
 app.post("/folders", auth, async (req, res) => {
   const folder = await FolderModel.create({
     name: req.body.name,
     parent: req.body.parent || null,
-    userId: req.user.userId,
+    userId: req.user.userId,  // ALWAYS take from token, not body
   });
 
-  res.json(folder);
+  res.json({
+    id: folder._id,
+    name: folder.name,
+    parent: folder.parent,
+  });
+});
+
+/* -------------------------
+        RENAME FOLDER
+------------------------- */
+app.put("/folders/:id", async (req, res) => {
+  const updated = await FolderModel.findByIdAndUpdate(
+    req.params.id,
+    { name: req.body.name },
+    { new: true }
+  );
+
+  res.json({
+    id: updated._id.toString(),
+    name: updated.name,
+    parent: updated.parent || null,
+  });
+});
+
+
+/* -------------------------
+        DELETE FOLDER
+------------------------- */
+app.delete("/folders/:id", async (req, res) => {
+  const id = req.params.id;
+
+  await FolderModel.findByIdAndDelete(id);
+
+  const filesInside = await FileModel.find({ folder: id });
+
+  filesInside.forEach((file) => {
+    const filePath = path.join(UPLOAD_DIR, path.basename(file.url));
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  });
+
+  await FileModel.deleteMany({ folder: id });
+
+  res.json({ message: "Folder deleted" });
 });
 
 /* =================================================================
@@ -127,6 +197,20 @@ app.post("/upload", auth, upload.array("files"), async (req, res) => {
   res.json(uploadedFiles);
 });
 
+
+/* -------------------------
+        RENAME FILE
+------------------------- */
+app.put("/files/:id", async (req, res) => {
+  const updated = await FileModel.findByIdAndUpdate(
+    req.params.id,
+    { name: req.body.name },
+    { new: true }
+  );
+  res.json(updated);
+});
+
+
 /* =================================================================
    DELETE FILE FROM S3 + DATABASE
 ================================================================= */
@@ -152,58 +236,72 @@ app.delete("/delete-file/:id", auth, async (req, res) => {
   res.json({ message: "Deleted successfully" });
 });
 
-/* =================================================================
-   AUTH - SIGNUP
-================================================================= */
+
+/* -------------------------
+        AUTH - SIGNUP
+------------------------- */
 app.post("/auth/signup", async (req, res) => {
-  const { name, email, password } = req.body;
+  try {
+    const { name, email, password } = req.body;
 
-  const existing = await User.findOne({ email });
-  if (existing) return res.status(400).json({ error: "Email already exists" });
+    const existing = await User.findOne({ email });
+    if (existing) {
+      return res.status(400).json({ error: "Email already exists" });
+    }
 
-  const hashed = await bcrypt.hash(password, 10);
+    const hashed = await bcrypt.hash(password, 10);
 
-  const user = await User.create({
-    name,
-    email,
-    password: hashed,
-  });
+    const user = await User.create({
+      name,
+      email,
+      password: hashed,
+    });
 
-  res.json({ message: "User registered", userId: user._id.toString() });
+    res.json({ message: "User registered", userId: user._id.toString() });
+  } catch (err) {
+    console.error("Signup error:", err);
+    res.status(500).json({ error: "Signup failed" });
+  }
 });
 
-/* =================================================================
-   AUTH - LOGIN
-================================================================= */
+/* -------------------------
+        AUTH - LOGIN
+------------------------- */
 app.post("/auth/login", async (req, res) => {
-  const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-  const user = await User.findOne({ email });
-  if (!user) return res.status(404).json({ error: "User not found" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
 
-  const match = await bcrypt.compare(password, user.password);
-  if (!match) return res.status(401).json({ error: "Incorrect password" });
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: "Incorrect password" });
 
-  const token = jwt.sign(
-    { userId: user._id.toString(), email: user.email },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
+    const token = jwt.sign(
+      { userId: user._id.toString(), email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
-  res.json({
-    token,
-    user: {
-      id: user._id.toString(),
-      name: user.name,
-      email: user.email,
-    },
-    message: "Login success",
-  });
+    res.json({
+  token,
+  user: {
+    id: user._id.toString(),
+    name: user.name,
+    email: user.email,
+  },
+  message: "Login success",
 });
 
-/* =================================================================
-   START SERVER
-================================================================= */
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Login failed" });
+  }
+});
+
+/* -------------------------
+         START SERVER
+------------------------- */
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);

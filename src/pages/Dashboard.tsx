@@ -28,7 +28,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "https://d3hsynlhookvwj.cloudfront.net";
 const user = JSON.parse(localStorage.getItem("user") || "{}");
 
 
